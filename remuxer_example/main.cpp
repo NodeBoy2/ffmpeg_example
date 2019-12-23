@@ -10,9 +10,12 @@ extern "C"
 
 std::string strInput = "/Users/fengyifan/Desktop/videos/3001.flv";
 std::string strOutFmt = "flv";
-std::string strOutput = "rtmp://live-origin.test.mtyuncdn.com/mttest/ffmpeg_test";
+std::string strOutput = "rtmp://live-origin.test.mtyuncdn.com/mttest/ffmpeg_test1";
 //std::string strOutput = "/Users/fengyifan/Desktop/videos/out.ts";
-bool isLive = true;
+bool isLive = true; // 设置为true，将模拟从实时流推送。
+
+std::shared_ptr<AVFormatContext> spInputFormat;
+std::shared_ptr<AVFormatContext> spOutputFormat;
 int videoIndex = -1;
 
 void msleep(int msec)
@@ -20,32 +23,35 @@ void msleep(int msec)
     std::this_thread::sleep_for(std::chrono::milliseconds(msec));
 }
 
-int main()
+bool initDemuxer()
 {
     // init demuxer
     AVFormatContext *pInputTemp = nullptr;
     if(avformat_open_input(&pInputTemp, strInput.c_str(), nullptr, nullptr) < 0)
     {
         std::cout << "open input format error" << std::endl;
-        return -1;
+        return false;
     }
-    std::shared_ptr<AVFormatContext> spInputFormat(pInputTemp, [](AVFormatContext *fmt) {
+    spInputFormat.reset(pInputTemp, [](AVFormatContext *fmt) {
         avformat_close_input(&fmt);
     });
     if(avformat_find_stream_info(spInputFormat.get(), 0) < 0)
     {
         std::cout << "find stream info error" << std::endl;
-        return -1;
+        return false;
     }
+    return true;
+}
 
-    // init muxer
+bool initMuxer()
+{
     AVFormatContext *pOutputTemp = nullptr;
     if(avformat_alloc_output_context2(&pOutputTemp, nullptr, strOutFmt.c_str(), strOutput.c_str()) < 0)
     {
         std::cout << "alloc output format error" << std::endl;
-        return -1;
+        return false;
     }
-    std::shared_ptr<AVFormatContext> spOutputFormat(pOutputTemp, [&](AVFormatContext *fmt){
+    spOutputFormat.reset(pOutputTemp, [&](AVFormatContext *fmt){
         avformat_free_context(fmt);
     });
 
@@ -64,15 +70,26 @@ int main()
     // write header
     if(!(spOutputFormat->oformat->flags & AVFMT_NOFILE))
         if(avio_open2(&spOutputFormat->pb, spOutputFormat->url, AVIO_FLAG_WRITE, nullptr, nullptr) < 0)
-            return -2;
+            return false;
     if(avformat_write_header(spOutputFormat.get(), nullptr) < 0)
     {
         std::cout << "write header error" << std::endl;
-        return -1;
+        return false;
     }
+    return true;
+}
+
+int main()
+{
+    // init demuxer
+    if(!initDemuxer())
+        return -1;
+
+    // init muxer
+    if(!initMuxer())
+        return -1;
 
     int64_t lastDts = 0;
-
     // process
     for (;;)
     {
