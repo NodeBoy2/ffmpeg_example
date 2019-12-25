@@ -170,6 +170,8 @@ int main()
         return -1;
     }
 
+    av_dump_format(spInputFormat.get(), 0, strInput.c_str(), 0);
+
     // init decoder
     if(!initDecoder(spInputFormat->streams[videoIndex]))
     {
