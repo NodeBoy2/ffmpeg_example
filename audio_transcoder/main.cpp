@@ -242,6 +242,19 @@ bool initResampler(AVStream *audioStream) {
 
 bool writePacketToMuxer(std::shared_ptr<AVPacket> &spPacket)
 {
+    int64_t dts = spPacket->pts * av_q2d(spInputFormat->streams[audioIndex]->time_base) * 1000;
+    std::cout << (spPacket->stream_index == audioIndex ? "audio: " : "video: ") << dts << std::endl;
+
+    if(spPacket->stream_index == audioIndex) {
+           int64_t dts = spPacket->dts * av_q2d(spOutputFormat->streams[0]->time_base) * 1000;
+           static auto firstFrame = std::chrono::system_clock::now();
+           auto now = std::chrono::system_clock::now();
+           uint64_t dis_millseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count()
+                   - std::chrono::duration_cast<std::chrono::seconds>(firstFrame.time_since_epoch()).count() * 1000;
+           int64_t waittime = dts - dis_millseconds;
+           msleep(waittime);
+    }
+
     if(av_interleaved_write_frame(spOutputFormat.get(), spPacket.get()) < 0)
     {
         std::cout << "mux error" << std::endl;
@@ -395,9 +408,6 @@ bool encodeAndMuxFrame(std::shared_ptr<AVFrame> &spFrame)
 //            spPacket->dts = spPacket->pts;
 //            lastPts = spPacket->pts;
 
-
-            int64_t dts = spPacket->pts * av_q2d(spInputFormat->streams[audioIndex]->time_base) * 1000;
-            std::cout << "audio pts: " << dts << std::endl;
             spPacket->stream_index = audioIndex;
             if(!writePacketToMuxer(spPacket))
                 return false;
@@ -510,12 +520,12 @@ int main()
             // 如果是直播流(推送文件模拟直播流)，等待到时
             if(isLive && spInPakcet->dts != AV_NOPTS_VALUE)
             {
-                int64_t dts = spInPakcet->dts * av_q2d(spInputFormat->streams[audioIndex]->time_base) * 1000;
-                static auto firstFrame = std::chrono::system_clock::now();
-                auto now = std::chrono::system_clock::now();
-                uint64_t dis_millseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count()
-                        - std::chrono::duration_cast<std::chrono::seconds>(firstFrame.time_since_epoch()).count() * 1000;
-                int64_t waittime = dts - dis_millseconds;
+//                int64_t dts = spInPakcet->dts * av_q2d(spInputFormat->streams[audioIndex]->time_base) * 1000;
+//                static auto firstFrame = std::chrono::system_clock::now();
+//                auto now = std::chrono::system_clock::now();
+//                uint64_t dis_millseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count()
+//                        - std::chrono::duration_cast<std::chrono::seconds>(firstFrame.time_since_epoch()).count() * 1000;
+//                int64_t waittime = dts - dis_millseconds;
                 // 每100ms发送一次数据
 //                if (waittime > 100)
 //                {
@@ -524,7 +534,7 @@ int main()
 //                }
 
                 // 根据流逝时间对比pts发送数据
-                msleep(waittime);
+//                msleep(waittime);
 
                 // 根据pts间隔发送数据
 //                std::cout << dts - lastDts << std::endl;
