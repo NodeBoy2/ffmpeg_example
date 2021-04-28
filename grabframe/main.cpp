@@ -14,7 +14,7 @@ extern "C"
 #include <string>
 #include <memory>
 
-std::string strInput = "http://s3plus.meituan.net/v1/mss_68f031651452497d96eb982a7308e27b/video/FD366F5674D6A2F894C1C5B9D92B749F.mp4";
+std::string strInput = "http://test-tx-flv.meituan.net/mttest/testdelay_264LD.flv";
 std::shared_ptr<AVFormatContext> spInputFormat;
 std::shared_ptr<AVCodecContext> spDecoderContext;
 std::shared_ptr<SwsContext> spImageConvert;         // 图像转换器上下文，解码除的图像可能不是YUV420P类型，需要进行转换（也可能是YUV420P，但是可能不是在连续内存存储）
@@ -138,7 +138,7 @@ int refreshThread(void *)
             event.type = REFRESH_EVENT;
             SDL_PushEvent(&event);
         }
-        SDL_Delay(20);
+        SDL_Delay(10);
     }
     //Break
     SDL_Event event;
@@ -259,10 +259,14 @@ int main()
                 if(spInPakcet->stream_index == videoIndex)
                     break;
             }
+//            if(spInPakcet->flags != AV_PKT_FLAG_KEY)
+//                continue;
             // decode
             auto spFrame = decodePacket(spInPakcet);
             if(spFrame == nullptr)
                 continue;
+//            if(spFrame->flags & AV_PICTURE_TYPE_I)
+//                continue;
 //            sws_scale(spImageConvert.get(), (const unsigned char* const*)spFrame->data, spFrame->linesize, 0, spDecoderContext->height, spFrameYUV->data, spFrameYUV->linesize);
             SDL_UpdateYUVTexture(sdlTexture, NULL, spFrame->data[0], spFrame->linesize[0],
                                                                    spFrame->data[1], spFrame->linesize[1],

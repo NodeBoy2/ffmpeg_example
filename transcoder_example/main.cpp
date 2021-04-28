@@ -8,12 +8,12 @@
 #include <memory>
 #include <thread>
 
-std::string strInput = "/Users/fengyifan/Desktop/videos/3001.flv";
-std::string strOutFmt = "flv";
-std::string strOutput = "/Users/fengyifan/Desktop/videos/out.flv";
+std::string strInput = "/Users/fengyifan/Desktop/videos/transcode/input";
+std::string strOutFmt = "mp4";
+std::string strOutput = "/Users/fengyifan/Desktop/videos/transcode/out.mp4";
 bool isLive = false; // 设置为true，将模拟从实时流推送。
 
-std::string strDecoderName = "h264"; // 优先使用的解码器名称，未找到使用默认的解码器
+std::string strDecoderName = "h265"; // 优先使用的解码器名称，未找到使用默认的解码器
 
 std::string strEncoderName = "libx264"; // 优先使用的编码器名称，未找到使用默认的编码器
 enum AVCodecID encoderID = AV_CODEC_ID_H264; // 编码器类型
@@ -143,6 +143,7 @@ bool initEncoder(AVStream *stream)
 
     spOutCodecPar->codec_id = encoderID;
     spOutCodecPar->bit_rate = bitrate;
+    spOutCodecPar->level = -1;
     if(spOutCodecPar->extradata != nullptr)
     {
         av_free(spOutCodecPar->extradata);
@@ -164,7 +165,7 @@ bool initEncoder(AVStream *stream)
         spEncoderContext.reset(codecContext, [](AVCodecContext *pContext){
             avcodec_free_context(&pContext);
         });
-        std::cout << "open decoder error" << std::endl;
+        std::cout << "open encoder error" << std::endl;
         return false;
     }
     spEncoderContext.reset(codecContext, [](AVCodecContext *pContext){
@@ -184,7 +185,7 @@ bool initEncoder(AVStream *stream)
 
 bool writePacketToMuxer(std::shared_ptr<AVPacket> &spPacket)
 {
-    if(av_write_frame(spOutputFormat.get(), spPacket.get()) < 0)
+    if(av_interleaved_write_frame(spOutputFormat.get(), spPacket.get()) < 0)
     {
         std::cout << "mux error" << std::endl;
         return false;
@@ -216,6 +217,21 @@ bool encodeAndMuxFrame(std::shared_ptr<AVFrame> &spFrame)
            std::cout << "encode frame error" << std::endl;
            return false;
         }
+
+        AVRational framerate = spEncoderContext->framerate;
+        AVRational ffmpegTimebase = spEncoderContext->time_base;
+        if(spPacket->duration <= 0 && framerate.num != 0 && framerate.den != 0)
+        {
+            int64_t nCalcDuration = (double)AV_TIME_BASE / (framerate.num/framerate.den);
+
+            int64_t duration = nCalcDuration / (double)(av_q2d(ffmpegTimebase)*AV_TIME_BASE);
+            spPacket->duration = duration;
+        }
+        static int64_t currentPts = 0;
+        spPacket->pts = currentPts;
+        spPacket->dts = currentPts;
+        currentPts += spPacket->duration;
+        std::cout << "pts " << currentPts << std::endl;
         if(!writePacketToMuxer(spPacket))
             return false;
     }
