@@ -11,12 +11,15 @@ extern "C"
 #include <string>
 #include <memory>
 #include <thread>
+#include <list>
+#include <mutex>
+#include <condition_variable>
 
-std::string strInput = "/Users/fengyifan/Desktop/videos/test_h264_acc.flv";
+std::string strInput = "rtmp://127.0.0.1/live/testlive1";
 std::string strOutFmt = "flv";
 //std::string strOutput = "/Users/fengyifan/Desktop/videos/out.flv";
 std::string strOutput = "rtmp://127.0.0.1/live/testlive";
-bool isLive = true; // 设置为true，将模拟从实时流推送。
+bool isLive = false; // 设置为true，将模拟从实时流推送。
 
 std::string strDecoderName = "aac"; // 优先使用的解码器名称，未找到使用默认的解码器
 
@@ -41,6 +44,9 @@ AVFilterContext* pSinkFilterContext;
 AVFilterContext* pSrcFilterContext;
 std::shared_ptr<AVFilterGraph> spFilterGraph;
 std::string strFiltersDescr = "sample_fmts=%s:sample_rates=%d:channel_layouts=0x%";
+
+std::list<std::shared_ptr<AVPacket>> spPakcetList;
+std::mutex packetMuxtex;
 
 
 
@@ -340,10 +346,10 @@ std::shared_ptr<AVFrame> getFrame(std::shared_ptr<AVFrame> &spFrame) {
 
 bool writePacketToMuxer(std::shared_ptr<AVPacket> &spPacket)
 {
-    int64_t dts = spPacket->pts * av_q2d(spInputFormat->streams[audioIndex]->time_base) * 1000;
+    int64_t dts = spPacket->pts * av_q2d(spInputFormat->streams[spPacket->stream_index]->time_base) * 1000;
     std::cout << (spPacket->stream_index == audioIndex ? "audio: " : "video: ") << dts << std::endl;
 
-    if(spPacket->stream_index == audioIndex) {
+    if(spPacket->stream_index == audioIndex && isLive) {
            int64_t dts = spPacket->dts * av_q2d(spOutputFormat->streams[0]->time_base) * 1000;
            static auto firstFrame = std::chrono::system_clock::now();
            auto now = std::chrono::system_clock::now();
@@ -386,11 +392,11 @@ bool encodeAndMuxFrame(std::shared_ptr<AVFrame> &spFrame)
        {
            ret = avcodec_receive_packet(spEncoderContext.get(), spPacket.get());
            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-               return true;
+               break;
            else if (ret < 0)
            {
               std::cout << "encode frame error" << std::endl;
-              return false;
+              break;
            }
 
            AVRational framerate = spEncoderContext->framerate;
@@ -421,7 +427,7 @@ bool encodeAndMuxFrame(std::shared_ptr<AVFrame> &spFrame)
 //            spPacket->dts = spPacket->pts;
 //            lastPts = spPacket->pts;
 
-           spPacket->stream_index = 0;
+           spPacket->stream_index = audioIndex;
            if(!writePacketToMuxer(spPacket))
                return false;
        }
@@ -508,6 +514,35 @@ int main()
 
    int64_t lastDts = 0;
 
+   std::thread processThread([]{
+       bool first = true;
+       std::shared_ptr<AVPacket> spInPakcet;
+        for(;;) {
+            packetMuxtex.lock();
+            if ((spPakcetList.size() < 30 && first)||(spPakcetList.size() > 0)) {
+                spInPakcet = spPakcetList.front();
+                spPakcetList.pop_front();
+                first = false;
+                std::cout << spPakcetList.size() << std::endl;
+            }
+            else {
+                packetMuxtex.unlock();
+                msleep(5);
+                continue;
+            }
+            packetMuxtex.unlock();
+
+            // 不是视频数据，直接复用
+            if(spInPakcet->stream_index != audioIndex)
+                writePacketToMuxer(spInPakcet);
+            else
+            {
+                if(!decodeAndEncodePacket(spInPakcet))
+                    std::cout << "decode and encode packet error" << std::endl;
+            }
+        }
+   });
+
    // process
    for (;;)
    {
@@ -525,40 +560,10 @@ int main()
            std::cout << "demux error" << std::endl;
            break;
        }
+       packetMuxtex.lock();
+       spPakcetList.push_back(spInPakcet);
+       packetMuxtex.unlock();
 
-       // 不是视频数据，直接复用
-       if(spInPakcet->stream_index != audioIndex)
-           writePacketToMuxer(spInPakcet);
-       else
-       {
-           // 如果是直播流(推送文件模拟直播流)，等待到时
-           if(isLive && spInPakcet->dts != AV_NOPTS_VALUE)
-           {
-//               int64_t dts = spInPakcet->dts * av_q2d(spInputFormat->streams[audioIndex]->time_base) * 1000;
-//               static auto firstFrame = std::chrono::system_clock::now();
-//               auto now = std::chrono::system_clock::now();
-//               uint64_t dis_millseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count()
-//                       - std::chrono::duration_cast<std::chrono::seconds>(firstFrame.time_since_epoch()).count() * 1000;
-//               int64_t waittime = dts - dis_millseconds;
-               // 每100ms发送一次数据
-//                if (waittime > 100)
-//                {
-//                    waittime -= 5;
-//                    msleep(waittime - 30);
-//                }
-
-               // 根据流逝时间对比pts发送数据
-//               msleep(waittime);
-
-               // 根据pts间隔发送数据
-//                std::cout << dts - lastDts << std::endl;
-//                if(lastDts != 0 && dts - lastDts > 0)
-//                    msleep(dts-lastDts);
-//                lastDts = dts;
-           }
-           if(!decodeAndEncodePacket(spInPakcet))
-               break;
-       }
    }
 
    // 清空解码器
