@@ -7,15 +7,14 @@ extern "C"
 #include <string>
 #include <memory>
 #include <thread>
+#include <list>
 
-std::string strInput = "http://1251021019.vod2.myqcloud.com/f98a4078vodcq1251021019/61978299387702292910682981/f0.mp4";
-// std::string strInput = "/Users/fengyifan/Desktop/project/go/hlsloader/file/134048_20ba0_396790f897ad4ba4aadf7beb5551e98f.m3u8";
+// std::string strInput = "/Users/fengyifan/Desktop/project/C++/ffmpeg_example/remuxer_example/test.mp4";
+std::string strInput = "/Users/fengyifan/Desktop/project/go/hlsloader/file/134048_20ba0_396790f897ad4ba4aadf7beb5551e98f.m3u8";
 // std::string strInput = "/Users/fengyifan/Desktop/project/go/hlsloader/jl/mtly_20211209.mp4";
-// std::string strInput = "/Users/fengyifan/Desktop/project/go/hlsloader/jl/mtly_20211209_mp4box.mp4";
 // std::string strInput = "/Users/fengyifan/Desktop/project/ffmpeg_build/FFmpeg/mtly_20211209_out.mp4";
 std::string strOutFmt = "mp4";
-std::string strOutput = "/Users/fengyifan/Desktop/project/C++/ffmpeg_example/remuxer_example/test.mp4";
-bool isLive = false; // 设置为true，将模拟从实时流推送。
+std::string strOutput = "/Users/fengyifan/Desktop/project/C++/ffmpeg_example/remuxer_example/test2.mp4";
 
 std::shared_ptr<AVFormatContext> spInputFormat;
 std::shared_ptr<AVFormatContext> spOutputFormat;
@@ -89,6 +88,29 @@ bool initMuxer()
     return true;
 }
 
+bool outputPakcet(std::list< std::shared_ptr<AVPacket> > *l) {
+
+    for (std::list< std::shared_ptr<AVPacket> >::iterator it = l->begin(); it != l->end(); it++) {
+        std::shared_ptr<AVPacket> spPakcet = *it;
+        int64_t dts = spPakcet->dts * av_q2d(spInputFormat->streams[spPakcet->stream_index]->time_base) * 1000;
+        int64_t duration = spPakcet->duration * av_q2d(spInputFormat->streams[spPakcet->stream_index]->time_base) * 1000;
+        int64_t pts = spPakcet->pts * av_q2d(spInputFormat->streams[spPakcet->stream_index]->time_base) * 1000;
+
+        // input -> output
+        AVStream *outStream = spOutputFormat->streams[spPakcet->stream_index];
+        spPakcet->dts = dts * outStream->time_base.den / outStream->time_base.num / 1000.0;
+        spPakcet->pts = pts * outStream->time_base.den / outStream->time_base.num / 1000.0;
+        spPakcet->duration = duration * outStream->time_base.den / outStream->time_base.num / 1000.0;
+        if(av_write_frame(spOutputFormat.get(), spPakcet.get()) < 0)
+        {
+            std::cout << "mux error" << std::endl;
+            return false;
+        }
+    }
+    l->clear();
+    return true;
+}
+
 int main()
 {
     // init demuxer
@@ -103,6 +125,8 @@ int main()
 
     int64_t firstVideoDts = -1;
     int64_t firstAudioDts = -1;
+    std::list< std::shared_ptr<AVPacket> > audioList;
+    std::list< std::shared_ptr<AVPacket> > videoList;
     // process
     for (;;)
     {
@@ -120,34 +144,24 @@ int main()
             std::cout << "demux error" << std::endl;
             break;
         }
-        int64_t dts = spPakcet->dts * av_q2d(spInputFormat->streams[spPakcet->stream_index]->time_base) * 1000;
         if (videoIndex == spPakcet->stream_index) {
-            if (firstVideoDts == -1) {
-                firstVideoDts = dts;
-            }
-            std::cout << "video dts: " << dts - firstVideoDts << std::endl;
+            videoList.push_back(spPakcet);
         } else {
-            if (firstAudioDts == -1) {
-                firstAudioDts = dts;
-            }
-            std::cout << "audio dts: " << dts - firstAudioDts << std::endl;
+            audioList.push_back(spPakcet);
         }
- 
-        // 如果是直播流(推送文件模拟直播流)，等待到时
-        if(isLive && spPakcet->dts != AV_NOPTS_VALUE && videoIndex == spPakcet->stream_index)
-        {
-            int64_t dts = spPakcet->dts * av_q2d(spInputFormat->streams[videoIndex]->time_base) * 1000;
-            if(lastDts != 0 && dts - lastDts > 0)
-                msleep(dts-lastDts);
-            lastDts = dts;
+        bool outRet = true;
+        if (videoList.size() >= 1) {
+            outRet = outputPakcet(&videoList);
         }
-
-        // if(av_write_frame(spOutputFormat.get(), spPakcet.get()) < 0)
-        // {
-        //     std::cout << "mux error" << std::endl;
-        //     break;
-        // }
+        if (audioList.size() >= 3) {
+            outRet = outputPakcet(&audioList);
+        }
+        if (outRet == false) {
+            break;
+        }
     }
+    outputPakcet(&videoList);
+    outputPakcet(&audioList);
 
     // write trailer
     av_write_trailer(spOutputFormat.get());
